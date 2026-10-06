@@ -1,7 +1,8 @@
 """代理探活面板 — FastAPI 入口。
 
-配置优先级：命令行参数 > 环境变量 > 默认值。
-运行：uv run main.py [--host 0.0.0.0] [--port 8000] [--proxy-file ...]
+名单从前端上传（POST /api/upload），名单与检测状态持久化在 SQLite；
+重启自动恢复。配置优先级：命令行参数 > 环境变量 > 默认值。
+运行：uv run main.py [--host 0.0.0.0] [--port 8000] [--db data/proxies.db]
 """
 from __future__ import annotations
 
@@ -20,17 +21,23 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Str
 from fastapi.staticfiles import StaticFiles
 
 from broker import Broker, sse_format
-from checker import CheckEngine, load_proxies
+from checker import CheckEngine, ProxyState, load_proxies, parse_proxies
+from store import ProxyStore
 
 log = logging.getLogger("proxy-dashboard")
 
-STATIC_DIR = Path(__file__).parent / "static"
+PROJECT_DIR = Path(__file__).parent
+STATIC_DIR = PROJECT_DIR / "static"
+DATA_DIR = PROJECT_DIR / "data"
+DEFAULT_DB = str(DATA_DIR / "proxies.db")
+UPLOAD_MAX = 10 * 1024 * 1024  # 10MB
 EXPORT_STATUSES = ("all", "ok", "proxy_error", "dead")
 
 
 @dataclass
 class Config:
-    proxy_file: str
+    proxy_file: str | None
+    db: str
     check_url: str
     timeout: float
     concurrency: int
@@ -41,11 +48,11 @@ class Config:
 
 def parse_args() -> Config:
     ap = argparse.ArgumentParser(description="代理探活面板")
-    ap.add_argument("--proxy-file", default=os.environ.get("PROXY_FILE", "/data/proxies_gn_001722.txt"),
-                    help="代理名单文件路径")
+    ap.add_argument("--proxy-file", default=os.environ.get("PROXY_FILE"),
+                    help="可选：库为空时的首次种子名单路径（库非空则忽略）")
+    ap.add_argument("--db", default=os.environ.get("DB_PATH", DEFAULT_DB), help="SQLite 库文件路径")
     ap.add_argument("--check-url", default=os.environ.get(
-        "CHECK_URL", "http://ip-api.com/json/?fields=status,query,country"),
-        help="探活目标 URL")
+        "CHECK_URL", "http://www.gstatic.com/generate_204"), help="探活目标 URL")
     ap.add_argument("--timeout", type=float, default=float(os.environ.get("CHECK_TIMEOUT", "10")),
                     help="单次检测超时（秒）")
     ap.add_argument("--concurrency", type=int, default=int(os.environ.get("CONCURRENCY", "100")),
@@ -73,13 +80,32 @@ def status_payload(app: FastAPI) -> dict:
     }
 
 
+async def persist_loop(engine: CheckEngine, store: ProxyStore) -> None:
+    """每 300ms 把脏代理批量写入 SQLite（写库不阻塞事件循环）。"""
+    while True:
+        await asyncio.sleep(0.3)
+        dirty = engine.take_dirty()
+        if dirty:
+            await asyncio.to_thread(store.save_updates, dirty)
+
+
 def create_app(cfg: Config) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        proxies, skipped = load_proxies(cfg.proxy_file)
-        for s in skipped:
-            log.warning("跳过 %s", s)
-        log.info("已加载 %d 个代理（跳过 %d 行），开始探活", len(proxies), len(skipped))
+        store = ProxyStore(cfg.db)
+        app.state.store = store
+        if store.count() == 0 and cfg.proxy_file:
+            seed, skipped = load_proxies(cfg.proxy_file)
+            for s in skipped:
+                log.warning("种子名单跳过 %s", s)
+            log.info("从 %s 导入种子名单 %d 个", cfg.proxy_file, len(seed))
+            proxies, _, _ = await asyncio.to_thread(store.apply_upload, seed)
+        else:
+            if cfg.proxy_file:
+                log.info("数据库已有名单，忽略 --proxy-file")
+            proxies = await asyncio.to_thread(store.load_all)
+        log.info("已加载 %d 个代理，开始探活", len(proxies))
+
         app.state.engine = CheckEngine(
             proxies, app.state.broker,
             check_url=cfg.check_url, timeout=cfg.timeout,
@@ -87,10 +113,21 @@ def create_app(cfg: Config) -> FastAPI:
         )
         app.state.broker.set_stats_provider(app.state.engine.stats)
         await app.state.broker.start()
-        await app.state.engine.start()  # 首轮扫描立即开始
+        await app.state.engine.start()  # 有名单时首轮扫描立即开始
+        app.state.persister = asyncio.create_task(
+            persist_loop(app.state.engine, store), name="db-persister")
         yield
+        app.state.persister.cancel()
+        try:
+            await app.state.persister
+        except asyncio.CancelledError:
+            pass
         await app.state.engine.stop()
-        await app.state.broker.stop()
+        dirty = app.state.engine.take_dirty()  # 最终落盘
+        if dirty:
+            await asyncio.to_thread(store.save_updates, dirty)
+        store.close()
+        log.info("已保存状态并关闭")
 
     app = FastAPI(lifespan=lifespan)
     app.state.cfg = cfg
@@ -127,6 +164,43 @@ def create_app(cfg: Config) -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    @app.post("/api/upload")
+    async def api_upload(request: Request):
+        """上传名单（text/plain，每行一个代理），覆盖旧名单。
+
+        已在库中的 URL 保留检测状态与统计；原始文本归档到 data/uploads/。
+        """
+        raw = await request.body()
+        if len(raw) > UPLOAD_MAX:
+            return JSONResponse(status_code=413, content={"detail": "名单过大（上限 10MB）"})
+        parsed, skipped = parse_proxies(raw.decode("utf-8", errors="replace"))
+        if not parsed:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "名单中没有可解析的代理", "skipped": skipped[:5]},
+            )
+        # 原始文本归档（含被跳过的行，供追溯）
+        uploads_dir = DATA_DIR / "uploads"
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+        (uploads_dir / f"{stamp}.txt").write_bytes(raw)
+
+        store: ProxyStore = request.app.state.store
+        engine: CheckEngine = request.app.state.engine
+        merged, kept, fresh = await asyncio.to_thread(store.apply_upload, parsed)
+        await engine.reload(merged)  # 新任务首轮立即开扫
+        request.app.state.broker.clear_pending()
+        request.app.state.broker.publish("snapshot", status_payload(request.app))
+        log.info("上传名单：%d 个（保留 %d · 新增 %d · 跳过 %d 行）",
+                 len(merged), kept, fresh, len(skipped))
+        return {
+            "loaded": len(merged),
+            "kept": kept,
+            "fresh": fresh,
+            "skipped_count": len(skipped),
+            "skipped": skipped[:5],
+        }
+
     @app.post("/api/check/{pid}")
     async def api_check_one(pid: int, request: Request):
         engine: CheckEngine = request.app.state.engine
@@ -148,7 +222,10 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.post("/api/check-all")
     async def api_check_all(request: Request):
-        result = request.app.state.engine.request_sweep_now()
+        engine: CheckEngine = request.app.state.engine
+        if not engine.proxies:
+            raise HTTPException(status_code=400, detail="名单为空，请先上传")
+        result = engine.request_sweep_now()
         return JSONResponse(
             status_code=202 if result == "queued" else 200,
             content={"result": result},

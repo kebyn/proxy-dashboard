@@ -58,6 +58,10 @@ class Broker:
         """缓冲单个代理结果，flush 时合并成一个 proxy_update 事件。"""
         self._pending.append(item)
 
+    def clear_pending(self) -> None:
+        """丢弃滞留的待发更新（名单替换时用，防止旧 id 混入新快照之后）。"""
+        self._pending.clear()
+
     def _fanout(self, message: str) -> None:
         for q in list(self._queues):
             try:
