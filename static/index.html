@@ -195,6 +195,42 @@ footer { font-size: 11.5px; color: var(--ink-3); margin: 14px 2px 26px; word-bre
 .replace-note { font-size: 12px; color: var(--warning); margin-top: 12px; min-height: 16px; }
 .upload-status { font-size: 12.5px; color: var(--ink-2); margin-top: 10px; min-height: 16px; }
 
+/* ---- 名单选择器 ---- */
+.list-dd .menu { min-width: 250px; max-height: 320px; overflow: auto; }
+#list-btn { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.list-item:hover { background: var(--surface); }
+.li-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.li-check { width: 14px; color: var(--accent); flex: none; font-size: 12px; }
+.li-name { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-item.active .li-name { color: var(--ink); }
+.li-count { color: var(--ink-3); font-size: 12px; margin-left: auto; }
+.li-del {
+  border: none; background: none; color: var(--ink-3); font-size: 12px;
+  padding: 2px 7px; border-radius: 5px; cursor: pointer; flex: none;
+}
+.li-del:hover { color: var(--critical); background: rgba(208, 59, 59, .12); }
+.li-del.confirm { color: #fff; background: var(--critical); }
+.menu-sep { border-top: 1px solid var(--hairline); margin: 5px 4px; }
+.menu-upload {
+  display: block; width: 100%; text-align: left; border: none; background: none;
+  color: var(--ink-2); font-size: 13px; padding: 8px 10px; border-radius: 6px; cursor: pointer;
+}
+.menu-upload:hover { background: var(--surface); color: var(--ink); }
+
+/* ---- 上传面板名称输入 ---- */
+.name-box { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; text-align: left; }
+.name-box label { font-size: 12.5px; color: var(--ink-2); flex: none; }
+.name-box input {
+  flex: 1; font: inherit; font-size: 13px; color: var(--ink);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 10px; outline: none;
+}
+.name-box input:focus { border-color: var(--accent); }
+
 /* 通用隐藏（置于末尾以覆盖 display 设置） */
 .hide { display: none; }
 </style>
@@ -208,7 +244,7 @@ footer { font-size: 11.5px; color: var(--ink-3); margin: 14px 2px 26px; word-bre
     </div>
     <div class="header-right">
       <span class="conn"><span class="conn-dot"></span><span id="conn-text">连接中</span></span>
-      <button id="btn-upload-top" class="hide">更换名单</button>
+      <button id="btn-upload-top" class="hide">上传名单</button>
       <button id="btn-check-all" class="hide">全部重检</button>
       <div class="dropdown hide" id="export-dd">
         <button id="btn-export">导出 ▾</button>
@@ -246,13 +282,20 @@ footer { font-size: 11.5px; color: var(--ink-3); margin: 14px 2px 26px; word-bre
   </div>
 
   <div class="toolbar">
+    <div class="dropdown list-dd hide" id="list-dd">
+      <button id="list-btn" type="button"><span id="list-label">名单</span> ▾</button>
+      <div class="menu" id="list-menu">
+        <div class="menu-sep"></div>
+        <button class="menu-upload" id="menu-upload" type="button">＋ 上传新名单</button>
+      </div>
+    </div>
     <div class="tabs" id="tabs">
       <button data-filter="all" class="active">全部 <span id="t-all">—</span></button>
       <button data-filter="ok">存活 <span id="t-ok">—</span></button>
       <button data-filter="proxy_error">异常 <span id="t-err">—</span></button>
       <button data-filter="dead">失败 <span id="t-dead">—</span></button>
     </div>
-    <input type="search" id="search" placeholder="搜索 IP、出口 IP 或国家">
+    <input type="search" id="search" placeholder="搜索 IP 或国家">
     <span class="shown" id="shown"></span>
   </div>
 
@@ -264,7 +307,6 @@ footer { font-size: 11.5px; color: var(--ink-3); margin: 14px 2px 26px; word-bre
           <th class="sortable" data-key="host">代理地址</th>
           <th class="sortable" data-key="status">状态</th>
           <th class="sortable num" data-key="latency_ms">延迟</th>
-          <th data-key="exit_ip">出口 IP</th>
           <th class="sortable" data-key="country">国家</th>
           <th class="sortable num" data-key="rate">成功率</th>
           <th class="sortable" data-key="last_checked_at">最后检测</th>
@@ -282,7 +324,7 @@ footer { font-size: 11.5px; color: var(--ink-3); margin: 14px 2px 26px; word-bre
 <div class="modal hide" id="upload-modal">
   <div class="modal-card">
     <div class="modal-head">
-      <span>更换名单</span>
+      <span>上传名单</span>
       <button class="modal-close" id="modal-close" type="button">✕</button>
     </div>
     <div id="upload-modal-slot"></div>
@@ -291,6 +333,10 @@ footer { font-size: 11.5px; color: var(--ink-3); margin: 14px 2px 26px; word-bre
 
 <template id="upload-tpl">
   <div class="upload-panel">
+    <div class="name-box">
+      <label for="">名单名称</label>
+      <input type="text" class="list-name" placeholder="留空自动取文件名 / 时间">
+    </div>
     <div class="dropzone">
       <div class="dz-arrow">↑</div>
       <div class="dz-text">拖拽名单文件到此处，或</div>
@@ -303,7 +349,7 @@ footer { font-size: 11.5px; color: var(--ink-3); margin: 14px 2px 26px; word-bre
       <textarea placeholder="http://user:pass@host:port&#10;http://user:pass@host:port" rows="5"></textarea>
       <button class="btn paste-btn" type="button">上传文本</button>
     </div>
-    <div class="replace-note"></div>
+    <div class="replace-note">保存为新名单；同名上传将覆盖该名单，匹配的代理保留统计</div>
     <div class="upload-status" role="status"></div>
   </div>
 </template>
@@ -362,7 +408,6 @@ function buildRow(p) {
     <td class="mono">${p.host}:${p.port}</td>
     <td></td>
     <td class="num"><div class="lat"><span class="latn"></span><div class="latbar"><i></i></div></div></td>
-    <td class="mono exit"></td>
     <td class="country"></td>
     <td class="num rate"></td>
     <td class="last"></td>
@@ -372,10 +417,9 @@ function buildRow(p) {
     status: tr.children[2],
     latn: tr.querySelector(".latn"),
     bar: tr.querySelector(".latbar i"),
-    exit: tr.children[4],
-    country: tr.children[5],
-    rateC: tr.children[6],
-    last: tr.children[7],
+    country: tr.children[4],
+    rateC: tr.children[5],
+    last: tr.children[6],
   });
   patchRow(p);
   return tr;
@@ -388,8 +432,8 @@ function patchRow(p) {
   e.latn.textContent = p.latency_ms == null ? "—" : Math.round(p.latency_ms) + " ms";
   e.bar.style.width = barWidth(p.latency_ms) + "%";
   e.bar.classList.toggle("empty", p.latency_ms == null);
-  e.exit.textContent = p.exit_ip || "—";
   e.country.textContent = p.country || "—";
+  e.country.title = p.country ? [p.country, p.asn].filter(Boolean).join(" · ") : "";
   const r = rate(p);
   e.rateC.textContent = r == null ? "—" : Math.round(r * 100) + "%";
   e.rateC.title = r == null ? "" : `${p.ok_checks}/${p.total_checks} 次成功`;
@@ -402,7 +446,7 @@ function patchRow(p) {
 function rowMatches(p) {
   if (state.filter !== "all" && p.status !== state.filter) return false;
   if (state.search) {
-    const hay = (p.host + " " + (p.exit_ip || "") + " " + (p.country || "")).toLowerCase();
+    const hay = (p.host + " " + (p.country || "")).toLowerCase();
     if (!hay.includes(state.search)) return false;
   }
   return true;
@@ -447,9 +491,11 @@ function renderSnapshot(payload) {
   state.proxies = new Map(payload.proxies.map((p) => [p.id, p]));
   let target = "";
   try { target = new URL(payload.config.check_url).host; } catch {}
+  const listName = payload.active_list ? payload.active_list.name : null;
   $("subtitle").textContent = payload.stats.total > 0
-    ? `${fmtInt(payload.stats.total)} 个代理 · 检测目标 ${target}`
+    ? `${listName || ""} · ${fmtInt(payload.stats.total)} 个代理 · 检测目标 ${target}`
     : `等待上传名单 · 检测目标 ${target}`;
+  renderLists(payload);
   $("footer").textContent =
     `并发 ${payload.config.concurrency} · 超时 ${payload.config.timeout}s · ` +
     `轮询间隔 ${payload.config.sweep_interval}s · 检测地址 ${payload.config.check_url}`;
@@ -499,10 +545,6 @@ function applyStats(s) {
   $("e-err").textContent = fmtInt(s.proxy_error);
   $("e-dead").textContent = fmtInt(s.dead);
   $("e-all").textContent = fmtInt(s.total);
-  document.querySelectorAll(".replace-note").forEach((el) => {
-    el.textContent = has
-      ? `将覆盖当前名单（${fmtInt(s.total)} 个代理）；已在库中的代理保留统计` : "";
-  });
 
   const sw = s.sweep, fill = $("meter-fill");
   if (sw.running) {
@@ -644,12 +686,13 @@ setInterval(() => {
 }, 30000);
 
 // ---- 上传名单 ----
-async function submitUpload(text, statusEl) {
+async function submitUpload(text, name, statusEl) {
   text = text.trim();
   if (!text) { statusEl.textContent = "内容为空"; return; }
   statusEl.textContent = "上传中…";
   try {
-    const r = await fetch("/api/upload", {
+    const q = name ? `?name=${encodeURIComponent(name)}` : "";
+    const r = await fetch("/api/upload" + q, {
       method: "POST",
       headers: { "Content-Type": "text/plain; charset=utf-8" },
       body: text,
@@ -662,11 +705,15 @@ async function submitUpload(text, statusEl) {
     }
     statusEl.textContent = "";
     closeModal();
-    toast(`已加载 ${fmtInt(d.loaded)} 个代理` +
+    toast(`「${d.name}」已加载 ${fmtInt(d.loaded)} 个代理` +
       (d.kept ? `（保留 ${fmtInt(d.kept)} · 新增 ${fmtInt(d.fresh)}）` : "") +
       (d.skipped_count ? ` · 跳过 ${fmtInt(d.skipped_count)} 行` : ""));
-    // 快照事件会随后自动重建界面
+    // 快照事件会随后自动重建界面（含名单选择器）
   } catch { statusEl.textContent = "上传失败"; }
+}
+
+function fileNameToListName(filename) {
+  return filename.replace(/\.[^.]+$/, "").trim();
 }
 
 function mountUploadPanel(container) {
@@ -675,11 +722,12 @@ function mountUploadPanel(container) {
   const fileInput = panel.querySelector("input[type=file]");
   const dropzone = panel.querySelector(".dropzone");
   const statusEl = panel.querySelector(".upload-status");
+  const nameInput = panel.querySelector(".list-name");
 
   panel.querySelector(".dz-btn").addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", async () => {
     const f = fileInput.files[0];
-    if (f) await submitUpload(await f.text(), statusEl);
+    if (f) await submitUpload(await f.text(), nameInput.value.trim() || fileNameToListName(f.name), statusEl);
     fileInput.value = "";
   });
   dropzone.addEventListener("dragover", (e) => {
@@ -691,11 +739,80 @@ function mountUploadPanel(container) {
     e.preventDefault();
     dropzone.classList.remove("over");
     const f = e.dataTransfer.files[0];
-    if (f) await submitUpload(await f.text(), statusEl);
+    if (f) await submitUpload(await f.text(), nameInput.value.trim() || fileNameToListName(f.name), statusEl);
   });
   panel.querySelector(".paste-btn").addEventListener("click", () =>
-    submitUpload(panel.querySelector("textarea").value, statusEl));
+    submitUpload(panel.querySelector("textarea").value, nameInput.value.trim(), statusEl));
 }
+
+// ---- 名单选择器 ----
+function renderLists(payload) {
+  const lists = payload.lists || [];
+  const active = payload.active_list;
+  $("list-label").textContent = active ? active.name : "名单";
+  $("list-dd").classList.toggle("hide", lists.length === 0);
+  const menu = $("list-menu");
+  menu.querySelectorAll(".list-item").forEach((n) => n.remove());
+  const sep = menu.querySelector(".menu-sep");
+  for (const l of lists) {
+    const div = document.createElement("div");
+    div.className = "list-item" + (active && l.id === active.id ? " active" : "");
+    div.dataset.id = l.id;
+    div.innerHTML =
+      `<span class="li-main"><span class="li-check">${active && l.id === active.id ? "✓" : ""}</span>` +
+      `<span class="li-name"></span><span class="li-count">${fmtInt(l.count)}</span></span>` +
+      `<button class="li-del" type="button" title="删除名单">✕</button>`;
+    div.querySelector(".li-name").textContent = l.name;
+    menu.insertBefore(div, sep);
+  }
+}
+
+function resetDel(btn) {
+  btn.classList.remove("confirm");
+  btn.textContent = "✕";
+}
+
+$("list-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $("list-dd").classList.toggle("open");
+});
+
+$("list-menu").addEventListener("click", async (e) => {
+  const del = e.target.closest(".li-del");
+  if (del) {
+    e.stopPropagation();
+    if (!del.classList.contains("confirm")) {
+      // 两步确认：先变红「确认」，3 秒后还原
+      document.querySelectorAll(".li-del.confirm").forEach(resetDel);
+      del.classList.add("confirm");
+      del.textContent = "确认";
+    setTimeout(() => { if (del.isConnected) resetDel(del); }, 3000);
+      return;
+    }
+    const id = +del.closest(".list-item").dataset.id;
+    resetDel(del);
+    try {
+      const r = await fetch(`/api/lists/${id}`, { method: "DELETE" });
+      if (r.ok) toast("已删除名单");
+      else toast((await r.json().catch(() => ({}))).detail || "删除失败");
+    } catch { toast("请求失败"); }
+    return;  // snapshot 事件会刷新选择器与面板
+  }
+  if (e.target.closest("#menu-upload")) {
+    $("list-dd").classList.remove("open");
+    openModal();
+    return;
+  }
+  const item = e.target.closest(".list-item");
+  if (item) {
+    $("list-dd").classList.remove("open");
+    if (item.classList.contains("active")) return;
+    try {
+      const r = await fetch(`/api/lists/${item.dataset.id}/activate`, { method: "POST" });
+      if (!r.ok) toast((await r.json().catch(() => ({}))).detail || "切换失败");
+    } catch { toast("请求失败"); }
+  }
+});
 
 // ---- 模态框与下拉菜单 ----
 function openModal() { $("upload-modal").classList.remove("hide"); }
@@ -711,13 +828,16 @@ $("btn-export").addEventListener("click", (e) => {
   e.stopPropagation();
   $("export-dd").classList.toggle("open");
 });
-document.addEventListener("click", () => $("export-dd").classList.remove("open"));
+document.addEventListener("click", () => {
+  $("export-dd").classList.remove("open");
+  $("list-dd").classList.remove("open");
+});
 
 // ---- 启动 ----
 const emptyRow = document.createElement("tr");
 emptyRow.id = "empty-row";
 emptyRow.className = "hide";
-emptyRow.innerHTML = '<td colspan="9" class="empty">无匹配的代理</td>';
+emptyRow.innerHTML = '<td colspan="8" class="empty">无匹配的代理</td>';
 
 mountUploadPanel($("upload-inline"));
 mountUploadPanel($("upload-modal-slot"));

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from dataclasses import dataclass
@@ -28,10 +27,11 @@ class ProxyState:
     port: int
     username: str
     password: str
+    list_id: int = 0
     status: str = "pending"  # pending | ok | proxy_error | dead
     latency_ms: float | None = None
-    exit_ip: str | None = None
-    country: str | None = None
+    country: str | None = None   # 本地 mmdb 归属，上传/启动时填充，与检测解耦
+    asn: str | None = None
     last_checked_at: str | None = None
     total_checks: int = 0
     ok_checks: int = 0
@@ -45,8 +45,8 @@ class ProxyState:
             "port": self.port,
             "status": self.status,
             "latency_ms": self.latency_ms,
-            "exit_ip": self.exit_ip,
             "country": self.country,
+            "asn": self.asn,
             "last_checked_at": self.last_checked_at,
             "total_checks": self.total_checks,
             "ok_checks": self.ok_checks,
@@ -120,10 +120,12 @@ class CheckEngine:
         timeout: float,
         concurrency: int,
         interval: float,
+        list_id: int | None = None,
     ) -> None:
         self._proxies = proxies
         self._by_id = {p.id: p for p in proxies}
         self._broker = broker
+        self.list_id = list_id  # 当前活跃名单（persister 写库用）
         self._check_url = check_url
         self._timeout = timeout
         self._concurrency = concurrency
@@ -164,7 +166,7 @@ class CheckEngine:
             await self._session.close()
             self._session = None
 
-    async def reload(self, proxies: list[ProxyState]) -> None:
+    async def reload(self, proxies: list[ProxyState], list_id: int | None = None) -> None:
         """替换名单：取消当前扫描，重置轮次状态，立即开始新一轮。"""
         if self._task is not None:
             self._task.cancel()
@@ -175,6 +177,8 @@ class CheckEngine:
             self._task = None
         self._proxies = proxies
         self._by_id = {p.id: p for p in proxies}
+        if list_id is not None:
+            self.list_id = list_id
         self._inflight.clear()  # 取消路径的 finally 已清，此处兜底
         self._dirty.clear()
         self.sweep_id = 0
@@ -299,16 +303,16 @@ class CheckEngine:
             t0 = time.monotonic()
             try:
                 async with self._session.get(self._check_url, proxy=p.url) as resp:
-                    body = await resp.text(errors="replace")
+                    await resp.read()
                     http_status = resp.status
                 latency_ms = (time.monotonic() - t0) * 1000
-                status, exit_ip, country = self._classify(http_status, body)
+                status = self._classify(http_status)
             except (aiohttp.ClientError, TimeoutError):
                 # 超时 / 连接拒绝 / 重置 / 代理不可达
-                status, latency_ms, exit_ip, country = "dead", None, None, None
+                status, latency_ms = "dead", None
             except Exception:
                 log.exception("检测代理 %s 时出现未预期异常", p.host)
-                status, latency_ms, exit_ip, country = "dead", None, None, None
+                status, latency_ms = "dead", None
 
             p.status = status
             p.last_checked_at = utcnow_iso()
@@ -316,13 +320,9 @@ class CheckEngine:
             if status == "ok":
                 p.ok_checks += 1
                 p.consecutive_failures = 0
-                if exit_ip:
-                    p.exit_ip = exit_ip
-                if country:
-                    p.country = country
             else:
                 p.consecutive_failures += 1
-                # 非 ok 保留上次 exit_ip / country（最近已知值）
+                # 非 ok 保留上次 country / asn（最近已知值）
             p.latency_ms = round(latency_ms, 1) if latency_ms is not None else None
 
             pub = p.public()
@@ -333,24 +333,9 @@ class CheckEngine:
             self._inflight.discard(p.id)
 
     @staticmethod
-    def _classify(http_status: int, body: str) -> tuple[str, str | None, str | None]:
-        """返回 (status, exit_ip, country)；dead 由调用方的异常路径判定。
-
-        ok          2xx 且 body 为空或合法 JSON（代理可用）
-        proxy_error 有 HTTP 响应但不可用（非 2xx，或 2xx 但 body 是被注入的垃圾）
-        """
-        if not 200 <= http_status < 300:
-            return "proxy_error", None, None
-        body = body.strip()
-        if not body:
-            return "ok", None, None  # 例如 generate_204 探活地址
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
-            return "proxy_error", None, None
-        if isinstance(data, dict):
-            return "ok", data.get("query"), data.get("country")
-        return "ok", None, None
+    def _classify(http_status: int) -> str:
+        """ok=2xx（含 204 空 body）；proxy_error=有响应但非 2xx；dead 由异常路径判定。"""
+        return "ok" if 200 <= http_status < 300 else "proxy_error"
 
     def _status_counts(self) -> dict[str, int]:
         counts = {"ok": 0, "proxy_error": 0, "dead": 0, "pending": 0}
