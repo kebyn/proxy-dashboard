@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代理探活面板</title>
+<style>
+:root {
+  --bg: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-2: #232322;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --ink-3: #898781;
+  --hairline: #2c2c2a;
+  --border: rgba(255, 255, 255, .10);
+  --accent: #3987e5;
+  --ok: #0ca30c;
+  --warning: #fab219;
+  --critical: #d03b3b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+}
+.page { max-width: 1440px; margin: 0 auto; padding: 20px 24px 10px; }
+
+/* ---- 顶栏 ---- */
+header { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+h1 { font-size: 18px; font-weight: 600; }
+.subtitle { font-size: 12px; color: var(--ink-3); margin-top: 3px; }
+.header-right { display: flex; align-items: center; gap: 10px; }
+.conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); margin-right: 6px; }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+body.offline .conn-dot { background: var(--critical); }
+body.offline #conn-text { color: var(--critical); }
+
+button, .btn {
+  font: inherit; font-size: 13px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 14px; cursor: pointer;
+  text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+  transition: background .12s;
+}
+button:hover:not(:disabled), .btn:hover { background: var(--surface-2); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ---- 扫描进度 ---- */
+.meter-row { margin: 16px 0 14px; }
+.meter { height: 6px; background: rgba(57, 135, 229, .18); border-radius: 3px; overflow: hidden; }
+.meter-fill { height: 100%; width: 0; background: var(--accent); border-radius: 0 3px 3px 0; transition: width .3s; }
+.meter-text { font-size: 12px; color: var(--ink-2); margin-top: 6px; }
+
+/* ---- 统计卡 ---- */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 12px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 13px 16px; }
+.card-label { font-size: 12px; color: var(--ink-3); display: flex; align-items: center; gap: 7px; }
+.card-value { font-size: 26px; font-weight: 600; margin-top: 4px; }
+.card.ok .card-value { color: var(--ok); }
+.card.warn .card-value { color: var(--warning); }
+.card.crit .card-value { color: var(--critical); }
+
+/* ---- 状态形状（不只靠颜色：圆点/三角/叉 + 文字） ---- */
+.shape { width: 9px; height: 9px; display: inline-block; flex: none; }
+.shape.ok { background: var(--ok); border-radius: 50%; }
+.shape.pend { border: 1.5px solid var(--ink-3); border-radius: 50%; }
+.shape.warn { background: var(--warning); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.shape.crit { position: relative; }
+.shape.crit::before, .shape.crit::after {
+  content: ""; position: absolute; left: 0; top: 3.5px; width: 9px; height: 2px;
+  background: var(--critical); border-radius: 1px;
+}
+.shape.crit::before { transform: rotate(45deg); }
+.shape.crit::after { transform: rotate(-45deg); }
+
+/* ---- 工具栏 ---- */
+.toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 18px 0 10px; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tabs button { font-size: 12.5px; padding: 5px 12px; border-radius: 999px; color: var(--ink-3); background: transparent; border-color: transparent; }
+.tabs button:hover { color: var(--ink-2); background: var(--surface); }
+.tabs button.active { color: var(--ink); background: var(--surface-2); border-color: var(--border); }
+.tabs button span { color: var(--ink-3); margin-left: 2px; }
+#search {
+  font: inherit; font-size: 13px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 12px; width: 250px; outline: none;
+}
+#search:focus { border-color: var(--accent); }
+#search::placeholder { color: var(--ink-3); }
+.shown { font-size: 12px; color: var(--ink-3); margin-left: auto; }
+
+/* ---- 表格 ---- */
+.table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  position: sticky; top: 0; z-index: 1; background: var(--surface);
+  font-size: 12px; font-weight: 500; color: var(--ink-2); text-align: left;
+  padding: 9px 10px; border-bottom: 1px solid var(--hairline); white-space: nowrap;
+}
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--ink); }
+th[data-dir="asc"]::after { content: " ↑"; color: var(--ink-3); }
+th[data-dir="desc"]::after { content: " ↓"; color: var(--ink-3); }
+td { padding: 6px 10px; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
+tbody tr { transition: background .1s; }
+tbody tr:hover { background: var(--surface-2); }
+tr.hide, .latbar i.empty { display: none; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+td.exit, td.country, td.last, td.rate { color: var(--ink-2); }
+td.last { min-width: 76px; }
+.badge { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12.5px; }
+
+/* 延迟：数字 + 单色微条（宽度 = sqrt(ms/3000) 封顶） */
+.lat { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.latbar { width: 64px; height: 4px; background: var(--hairline); border-radius: 2px; overflow: hidden; flex: none; }
+.latbar i { display: block; height: 100%; background: var(--accent); border-radius: 0 2px 2px 0; }
+
+.op {
+  font-size: 12px; padding: 3px 10px; border-radius: 6px;
+  color: var(--ink-2); background: transparent; border: 1px solid transparent;
+}
+.op:hover:not(:disabled) { color: var(--ink); background: var(--surface-2); border-color: var(--border); }
+td.empty { text-align: center; color: var(--ink-3); padding: 28px 0; }
+
+footer { font-size: 11.5px; color: var(--ink-3); margin: 14px 2px 26px; word-break: break-all; }
+
+/* ---- Toast ---- */
+.toast {
+  position: fixed; right: 20px; bottom: 20px; z-index: 9;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 16px; font-size: 13px; color: var(--ink);
+  opacity: 0; transform: translateY(6px); pointer-events: none;
+  transition: opacity .18s, transform .18s;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div>
+      <h1>代理探活面板</h1>
+      <div class="subtitle" id="subtitle">连接中…</div>
+    </div>
+    <div class="header-right">
+      <span class="conn"><span class="conn-dot"></span><span id="conn-text">连接中</span></span>
+      <button id="btn-check-all">全部重检</button>
+      <a class="btn" id="btn-export" href="/api/export">导出存活</a>
+    </div>
+  </header>
+
+  <div class="meter-row">
+    <div class="meter"><div class="meter-fill" id="meter-fill"></div></div>
+    <div class="meter-text" id="meter-text">等待数据…</div>
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="card-label">代理总数</div><div class="card-value" id="c-total">—</div></div>
+    <div class="card ok"><div class="card-label"><span class="shape ok"></span>存活</div><div class="card-value" id="c-ok">—</div></div>
+    <div class="card warn"><div class="card-label"><span class="shape warn"></span>异常</div><div class="card-value" id="c-err">—</div></div>
+    <div class="card crit"><div class="card-label"><span class="shape crit"></span>失败</div><div class="card-value" id="c-dead">—</div></div>
+    <div class="card"><div class="card-label">存活率</div><div class="card-value" id="c-rate">—</div></div>
+    <div class="card"><div class="card-label">平均延迟</div><div class="card-value" id="c-lat">—</div></div>
+  </div>
+
+  <div class="toolbar">
+    <div class="tabs" id="tabs">
+      <button data-filter="all" class="active">全部 <span id="t-all">—</span></button>
+      <button data-filter="ok">存活 <span id="t-ok">—</span></button>
+      <button data-filter="proxy_error">异常 <span id="t-err">—</span></button>
+      <button data-filter="dead">失败 <span id="t-dead">—</span></button>
+    </div>
+    <input type="search" id="search" placeholder="搜索 IP、出口 IP 或国家">
+    <span class="shown" id="shown"></span>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th class="sortable num" data-key="id" data-dir="asc">#</th>
+          <th class="sortable" data-key="host">代理地址</th>
+          <th class="sortable" data-key="status">状态</th>
+          <th class="sortable num" data-key="latency_ms">延迟</th>
+          <th data-key="exit_ip">出口 IP</th>
+          <th class="sortable" data-key="country">国家</th>
+          <th class="sortable num" data-key="rate">成功率</th>
+          <th class="sortable" data-key="last_checked_at">最后检测</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <footer id="footer"></footer>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+
+const STATUS_META = {
+  ok: { label: "存活", shape: "ok" },
+  proxy_error: { label: "异常", shape: "warn" },
+  dead: { label: "失败", shape: "crit" },
+  pending: { label: "待检测", shape: "pend" },
+};
+const STATUS_RANK = { ok: 0, proxy_error: 1, dead: 2, pending: 3 };
+
+const state = {
+  proxies: new Map(),   // id -> 公开字段对象
+  filter: "all",
+  search: "",
+  sort: { key: "id", dir: 1 },
+};
+const els = new Map();  // id -> 行内单元格引用
+
+// ---- 格式化 ----
+const fmtInt = (n) => (n == null ? "—" : n.toLocaleString("zh-CN"));
+const fmtPct = (x) => (x == null ? "—" : (x * 100).toFixed(1) + "%");
+function fmtRel(iso) {
+  if (!iso) return "—";
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 5) return "刚刚";
+  if (s < 60) return Math.floor(s) + " 秒前";
+  if (s < 3600) return Math.floor(s / 60) + " 分钟前";
+  if (s < 86400) return Math.floor(s / 3600) + " 小时前";
+  return Math.floor(s / 86400) + " 天前";
+}
+const fmtClock = (iso) =>
+  iso ? new Date(iso).toLocaleTimeString("zh-CN", { hour12: false }) : "—";
+const rate = (p) => (p.total_checks ? p.ok_checks / p.total_checks : null);
+const barWidth = (ms) => (ms == null ? 0 : Math.min(1, Math.sqrt(ms / 3000)) * 100);
+
+// ---- 行渲染 ----
+function badgeHTML(p) {
+  const m = STATUS_META[p.status] || STATUS_META.pending;
+  return `<span class="badge"><span class="shape ${m.shape}"></span>${m.label}</span>`;
+}
+
+function buildRow(p) {
+  const tr = document.createElement("tr");
+  tr.dataset.id = p.id;
+  tr.innerHTML = `
+    <td class="num">${p.id}</td>
+    <td class="mono">${p.host}:${p.port}</td>
+    <td></td>
+    <td class="num"><div class="lat"><span class="latn"></span><div class="latbar"><i></i></div></div></td>
+    <td class="mono exit"></td>
+    <td class="country"></td>
+    <td class="num rate"></td>
+    <td class="last"></td>
+    <td><button class="op" data-act="copy">复制</button><button class="op" data-act="recheck">重检</button></td>`;
+  els.set(p.id, {
+    tr,
+    status: tr.children[2],
+    latn: tr.querySelector(".latn"),
+    bar: tr.querySelector(".latbar i"),
+    exit: tr.children[4],
+    country: tr.children[5],
+    rateC: tr.children[6],
+    last: tr.children[7],
+  });
+  patchRow(p);
+  return tr;
+}
+
+function patchRow(p) {
+  const e = els.get(p.id);
+  if (!e) return;
+  e.status.innerHTML = badgeHTML(p);
+  e.latn.textContent = p.latency_ms == null ? "—" : Math.round(p.latency_ms) + " ms";
+  e.bar.style.width = barWidth(p.latency_ms) + "%";
+  e.bar.classList.toggle("empty", p.latency_ms == null);
+  e.exit.textContent = p.exit_ip || "—";
+  e.country.textContent = p.country || "—";
+  const r = rate(p);
+  e.rateC.textContent = r == null ? "—" : Math.round(r * 100) + "%";
+  e.rateC.title = r == null ? "" : `${p.ok_checks}/${p.total_checks} 次成功`;
+  e.last.textContent = fmtRel(p.last_checked_at);
+  e.last.title = p.last_checked_at
+    ? new Date(p.last_checked_at).toLocaleString("zh-CN", { hour12: false }) : "";
+}
+
+// ---- 筛选 / 搜索 / 排序 ----
+function rowMatches(p) {
+  if (state.filter !== "all" && p.status !== state.filter) return false;
+  if (state.search) {
+    const hay = (p.host + " " + (p.exit_ip || "") + " " + (p.country || "")).toLowerCase();
+    if (!hay.includes(state.search)) return false;
+  }
+  return true;
+}
+
+function updateVisibility() {
+  let shown = 0;
+  for (const p of state.proxies.values()) {
+    const e = els.get(p.id);
+    const show = rowMatches(p);
+    e.tr.classList.toggle("hide", !show);
+    if (show) shown++;
+  }
+  $("shown").textContent = `显示 ${fmtInt(shown)} / ${fmtInt(state.proxies.size)} 行`;
+  emptyRow.classList.toggle("hide", shown > 0);
+}
+
+function sortValue(p, key) {
+  if (key === "rate") return rate(p);
+  if (key === "status") return STATUS_RANK[p.status];
+  return p[key];
+}
+
+function sortRows() {
+  const { key, dir } = state.sort;
+  const arr = [...state.proxies.values()].sort((a, b) => {
+    const va = sortValue(a, key), vb = sortValue(b, key);
+    if (va == null && vb == null) return a.id - b.id;
+    if (va == null) return 1;   // 空值恒排最后
+    if (vb == null) return -1;
+    if (va < vb) return -dir;
+    if (va > vb) return dir;
+    return a.id - b.id;
+  });
+  const tbody = $("tbody");
+  for (const p of arr) tbody.appendChild(els.get(p.id).tr);  // append 移动既有节点
+  tbody.appendChild(emptyRow);
+}
+
+// ---- 快照与实时事件 ----
+function renderSnapshot(payload) {
+  state.proxies = new Map(payload.proxies.map((p) => [p.id, p]));
+  let target = "";
+  try { target = new URL(payload.config.check_url).host; } catch {}
+  $("subtitle").textContent = `${fmtInt(payload.stats.total)} 个代理 · 检测目标 ${target}`;
+  $("footer").textContent =
+    `并发 ${payload.config.concurrency} · 超时 ${payload.config.timeout}s · ` +
+    `轮询间隔 ${payload.config.sweep_interval}s · 检测地址 ${payload.config.check_url}`;
+  const frag = document.createDocumentFragment();
+  els.clear();
+  for (const p of payload.proxies) frag.appendChild(buildRow(p));
+  frag.appendChild(emptyRow);
+  const tbody = $("tbody");
+  tbody.innerHTML = "";
+  tbody.appendChild(frag);
+  sortRows();
+  applyStats(payload.stats);
+  updateVisibility();
+}
+
+function applyProxyUpdates(items) {
+  for (const p of items) {
+    state.proxies.set(p.id, p);
+    if (els.has(p.id)) patchRow(p);
+  }
+  // 筛选中才需要重算可见性；全部+无搜索时任何行都可见
+  if (state.filter !== "all" || state.search) updateVisibility();
+}
+
+function applyStats(s) {
+  $("c-total").textContent = fmtInt(s.total);
+  $("c-ok").textContent = fmtInt(s.ok);
+  $("c-err").textContent = fmtInt(s.proxy_error);
+  $("c-dead").textContent = fmtInt(s.dead);
+  $("c-rate").textContent = fmtPct(s.alive_rate);
+  $("c-lat").textContent = s.avg_latency_ms == null ? "—" : Math.round(s.avg_latency_ms) + " ms";
+  $("t-all").textContent = fmtInt(s.total);
+  $("t-ok").textContent = fmtInt(s.ok);
+  $("t-err").textContent = fmtInt(s.proxy_error);
+  $("t-dead").textContent = fmtInt(s.dead);
+  $("btn-check-all").disabled = !!s.sweep.running;
+  $("btn-export").textContent = `导出存活${s.ok ? "（" + fmtInt(s.ok) + "）" : ""}`;
+
+  const sw = s.sweep, fill = $("meter-fill");
+  if (sw.running) {
+    const pct = sw.total ? sw.checked / sw.total : 0;
+    fill.style.width = (pct * 100).toFixed(1) + "%";
+    $("meter-text").textContent =
+      `检测中 · 第 ${sw.id} 轮 · ${fmtInt(sw.checked)}/${fmtInt(sw.total)}（${Math.round(pct * 100)}%）`;
+  } else if (sw.last_finished_at) {
+    fill.style.width = "100%";
+    const dur = sw.last_duration_ms != null ? Math.round(sw.last_duration_ms / 1000) : "?";
+    const next = sw.next_sweep_at ? ` · 下轮 ${fmtClock(sw.next_sweep_at)}` : "";
+    $("meter-text").textContent = `第 ${sw.id} 轮完成 · 用时 ${dur} 秒${next}`;
+  } else {
+    fill.style.width = "0%";
+    $("meter-text").textContent = "等待首轮检测…";
+  }
+}
+
+function applySweep(evt) {
+  if (evt.phase === "start") {
+    $("meter-fill").style.width = "0%";
+    $("meter-text").textContent = `检测中 · 第 ${evt.id} 轮 · 0/${fmtInt(evt.total)}（0%）`;
+    $("btn-check-all").disabled = true;
+  }
+  // end 之后伴随的 stats 事件会接管进度条
+}
+
+// ---- SSE ----
+let es = null;
+function setConn(ok) {
+  document.body.classList.toggle("offline", !ok);
+  $("conn-text").textContent = ok ? "已连接" : "连接断开，重连中…";
+}
+function connectSSE() {
+  es = new EventSource("/api/events");
+  es.onopen = () => setConn(true);
+  es.onerror = () => setConn(false);  // EventSource 自动重连，重连后靠 snapshot 恢复
+  es.addEventListener("snapshot", (e) => renderSnapshot(JSON.parse(e.data)));
+  es.addEventListener("proxy_update", (e) => applyProxyUpdates(JSON.parse(e.data).items));
+  es.addEventListener("stats", (e) => applyStats(JSON.parse(e.data)));
+  es.addEventListener("sweep", (e) => applySweep(JSON.parse(e.data)));
+}
+
+// ---- 交互 ----
+$("tabs").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-filter]");
+  if (!btn) return;
+  state.filter = btn.dataset.filter;
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b === btn));
+  updateVisibility();
+});
+
+let searchTimer = null;
+$("search").addEventListener("input", (e) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    state.search = e.target.value.trim().toLowerCase();
+    updateVisibility();
+  }, 150);
+});
+
+document.querySelectorAll("th.sortable").forEach((th) => {
+  th.addEventListener("click", () => {
+    const key = th.dataset.key;
+    if (state.sort.key === key) state.sort.dir *= -1;
+    else state.sort = { key, dir: 1 };
+    document.querySelectorAll("th.sortable").forEach((t) => t.removeAttribute("data-dir"));
+    th.dataset.dir = state.sort.dir === 1 ? "asc" : "desc";
+    sortRows();  // 只在点击表头时重排，流式更新期间行不跳动
+  });
+});
+
+$("btn-check-all").addEventListener("click", async () => {
+  try {
+    const r = await fetch("/api/check-all", { method: "POST" });
+    const d = await r.json();
+    toast(d.result === "queued" ? "已加入队列，本轮结束后开始" : "已开始全部重检");
+  } catch { toast("请求失败"); }
+});
+
+$("tbody").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const id = +btn.closest("tr").dataset.id;
+  if (btn.dataset.act === "copy") await copyUrl(id);
+  else if (btn.dataset.act === "recheck") await recheck(id, btn);
+});
+
+async function copyUrl(id) {
+  try {
+    const r = await fetch(`/api/proxies/${id}/url`);
+    if (!r.ok) { toast("获取失败"); return; }
+    const text = (await r.text()).trim();
+    await copyText(text);
+    toast("已复制完整代理地址");
+  } catch { toast("复制失败"); }
+}
+
+async function copyText(text) {
+  // 局域网 http 打开时 navigator.clipboard 不可用，需 execCommand 兜底
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); return; } catch {}
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); } finally { ta.remove(); }
+}
+
+async function recheck(id, btn) {
+  btn.disabled = true;
+  btn.textContent = "检测中";
+  try {
+    const r = await fetch(`/api/check/${id}`, { method: "POST" });
+    if (r.status === 409) toast("该代理正在检测中");
+    else if (!r.ok) toast("重检失败");
+  } catch { toast("请求失败"); }
+  finally { btn.disabled = false; btn.textContent = "重检"; }
+}
+
+// ---- Toast ----
+let toastTimer = null;
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+}
+
+// ---- 相对时间定期刷新 ----
+setInterval(() => {
+  for (const p of state.proxies.values()) {
+    const e = els.get(p.id);
+    if (e && p.last_checked_at) e.last.textContent = fmtRel(p.last_checked_at);
+  }
+}, 30000);
+
+// ---- 启动 ----
+const emptyRow = document.createElement("tr");
+emptyRow.id = "empty-row";
+emptyRow.className = "hide";
+emptyRow.innerHTML = '<td colspan="9" class="empty">无匹配的代理</td>';
+
+connectSSE();
+</script>
+</body>
+</html>
